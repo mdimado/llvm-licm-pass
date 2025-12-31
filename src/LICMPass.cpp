@@ -1,26 +1,38 @@
 #include "LICMPass.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
+static bool isLoopInvariantInstruction(const Instruction *I, const Loop *L) {
+  if (I->isTerminator() || isa<PHINode>(I) ||
+      I->mayWriteToMemory() || I->mayHaveSideEffects())
+    return false;
+  for (const Use &U : I->operands()) {
+    const Value *V = U.get();
+    if (isa<Constant>(V) || isa<Argument>(V)) continue;
+    if (const auto *Op = dyn_cast<Instruction>(V))
+      if (L->contains(Op->getParent())) return false;
+  }
+  return true;
+}
+
 PreservedAnalyses LICMPass::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   (void)DT;
-
   for (Loop *L : LI.getLoopsInPreorder()) {
-    BasicBlock *Preheader = L->getLoopPreheader();
-    if (!Preheader) {
-      errs() << "[LICM] Loop at depth " << L->getLoopDepth() << " has no preheader — skipping.\n";
-      continue;
-    }
-    errs() << "[LICM] Found loop depth=" << L->getLoopDepth()
-           << " fn='" << F.getName() << "' preheader=" << Preheader->getName() << "\n";
+    if (!L->getLoopPreheader()) continue;
+    for (BasicBlock *BB : L->getBlocks())
+      for (Instruction &I : *BB)
+        if (isLoopInvariantInstruction(&I, L))
+          errs() << "[LICM] Invariant candidate: " << I << "\n";
   }
   return PreservedAnalyses::all();
 }
