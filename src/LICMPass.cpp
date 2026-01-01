@@ -1,4 +1,5 @@
 #include "LICMPass.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
@@ -23,16 +24,33 @@ static bool isLoopInvariantInstruction(const Instruction *I, const Loop *L) {
   return true;
 }
 
+static SmallVector<Instruction *, 16>
+collectInvariantInstructions(Loop *L) {
+  SmallVector<Instruction *, 16> Worklist;
+  bool Changed = true;
+  while (Changed) {
+    Changed = false;
+    for (BasicBlock *BB : L->getBlocks())
+      for (Instruction &I : *BB)
+        if (isLoopInvariantInstruction(&I, L))
+          if (find(Worklist, &I) == Worklist.end()) {
+            Worklist.push_back(&I);
+            Changed = true;
+          }
+  }
+  return Worklist;
+}
+
 PreservedAnalyses LICMPass::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   (void)DT;
   for (Loop *L : LI.getLoopsInPreorder()) {
     if (!L->getLoopPreheader()) continue;
-    for (BasicBlock *BB : L->getBlocks())
-      for (Instruction &I : *BB)
-        if (isLoopInvariantInstruction(&I, L))
-          errs() << "[LICM] Invariant candidate: " << I << "\n";
+    auto Inv = collectInvariantInstructions(L);
+    errs() << "[LICM] Found " << Inv.size() << " invariant(s) in loop depth="
+           << L->getLoopDepth() << " fn='" << F.getName() << "'\n";
+    for (auto *I : Inv) errs() << "       " << *I << "\n";
   }
   return PreservedAnalyses::all();
 }
