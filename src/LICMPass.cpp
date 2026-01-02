@@ -1,6 +1,15 @@
+//===- LICMPass.cpp - Loop Invariant Code Motion Pass ---------------------===//
+//
+// Custom LLVM optimization pass: Loop Invariant Code Motion (LICM).
+// Detects loops, identifies invariant instructions, hoists to preheader.
+//
+//===----------------------------------------------------------------------===//
+
 #include "LICMPass.h"
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopPass.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -9,6 +18,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 
 static bool isLoopInvariantInstruction(const Instruction *I, const Loop *L) {
@@ -45,14 +55,33 @@ PreservedAnalyses LICMPass::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   (void)DT;
+
+  bool Changed = false;
+
   for (Loop *L : LI.getLoopsInPreorder()) {
-    if (!L->getLoopPreheader()) continue;
-    auto Inv = collectInvariantInstructions(L);
-    errs() << "[LICM] Found " << Inv.size() << " invariant(s) in loop depth="
-           << L->getLoopDepth() << " fn='" << F.getName() << "'\n";
-    for (auto *I : Inv) errs() << "       " << *I << "\n";
+    BasicBlock *Preheader = L->getLoopPreheader();
+    if (!Preheader) {
+      errs() << "[LICM] Loop at depth " << L->getLoopDepth()
+             << " has no preheader — skipping.\n";
+      continue;
+    }
+
+    SmallVector<Instruction *, 16> Invariants = collectInvariantInstructions(L);
+    if (Invariants.empty()) continue;
+
+    Instruction *InsertPt = Preheader->getTerminator();
+    for (Instruction *I : Invariants) {
+      errs() << "[LICM] Hoisting: " << *I << "\n";
+      I->moveBefore(InsertPt);
+      Changed = true;
+    }
+
+    errs() << "[LICM] Hoisted " << Invariants.size()
+           << " instruction(s) from loop at depth " << L->getLoopDepth()
+           << " in function '" << F.getName() << "'\n";
   }
-  return PreservedAnalyses::all();
+
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
 llvm::PassPluginLibraryInfo getLICMPassPluginInfo() {
@@ -61,10 +90,14 @@ llvm::PassPluginLibraryInfo getLICMPassPluginInfo() {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "licm-custom") { FPM.addPass(LICMPass()); return true; }
+                  if (Name == "licm-custom") {
+                    FPM.addPass(LICMPass());
+                    return true;
+                  }
                   return false;
                 });
           }};
 }
+
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() { return getLICMPassPluginInfo(); }
