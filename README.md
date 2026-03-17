@@ -96,10 +96,6 @@ for each Loop (getLoopsInPreorder)
 | `no_hoist` | `i*2` (loop-variant) | Not hoisted |
 | `nested_licm` | Two nesting levels | Each to correct preheader |
 
-## Skills demonstrated
-
-LLVM IR analysis · compiler pass development · loop optimization · C++ systems programming · CMake
-
 ## License
 
 MIT
